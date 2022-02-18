@@ -1,20 +1,18 @@
-from typing import Sequence
 from simplediff import diff
 import re 
 
 # import nltk
 # nltk.download("stopwords")
 from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer # Consider using this to trim words, just not sure how it will work with stopwords
 import torch
 
 
 
-class Language_dataset(torch.utils.data.IterableDataset):
-    def __init__(self, file_name="bias_data/bias_data/WNC/biased.word.dev", stem=False, remove_stopwords=False):
+class LanguageDataset(torch.utils.data.IterableDataset):
+    def __init__(self, file_name="bias_data/bias_data/WNC/biased.word.dev", unbiased_label=0, remove_stopwords=False):
         self.data = open(file_name, "r") 
         self.file_name = file_name 
-        self.stem = stem
+        self.unbiased_label = unbiased_label
         self.remove_stopwords = remove_stopwords
 
     def reset(self):
