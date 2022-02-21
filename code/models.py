@@ -2,52 +2,66 @@ import torch.nn as nn
 import torch
 
 
-class bias_detector(nn.Module):
-    def __init__(self, embedding_dim, embedder, num_layers=1, dropout=0, bidirectional=False):
-        super().__init__()
+class BiasDetector(nn.Module):
+    def __init__(self, embedding_dim, hidden_dim, embedder, model="rnn", num_layers=1, dropout=0, bidirectional=False, squisher=nn.Sigmoid):
+        super(BiasDetector, self).__init__()
 
-        # The embedder should be a class
-        # embedding_dim should be the per token dimension of the output of the embedder
-        # ie, if each word is encoded individually, return 
         self.embedder = embedder(embedding_dim)
+        self.dropout = nn.Dropout(dropout)
 
-        # I believe to turn the RNN into and LSTM model, just replace RNN with LSTM in the line below. 
-        # Therefor, focus on understanding vectors first
-        self.rnn = nn.RNN(input_size=embedding_dim, hidden_size=embedding_dim, num_layers=num_layers, dropout=dropout, bidirectional=bidirectional)
+        model = model.lower()
+        if model == "rnn":
+            model = nn.RNN 
+        elif model == "lstm":
+            model = nn.LSTM
+        else:
+            raise ValueError("invalid value for model argument in the BiasDetector class")
 
-        self.fully_connected = nn.Linear(embedding_dim, 1)
+        self.model = model(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, bidirectional=bidirectional)
+        self.fully_connected = nn.Linear(hidden_dim * 2 if bidirectional else hidden_dim, 1)
+        self.squisher = squisher()
 
     def forward(self, input):
         # Feel free to rename what you like, this is just a rough outline to work around
         embedded = self.embedder.embed(input)
 
-        outputs, (hidden, cell) = self.rnn(embedded)
+        embedded = self.dropout(embedded)
+        outputs, _= self.model(embedded)
+        return self.squisher(self.fully_connected(outputs))
 
-        return nn.Sigmoid(self.fully_connected(outputs))
+ 
+class Example():
+    def __init__(self, skip):
+        self.embbeddings = {
+            "the" : torch.tensor([1.5, 0.2, -1, -0.3]),
+            "cat" : torch.tensor([2.3, 0.1, 0, -5]),
+            "sat" : torch.tensor([0.5, 0.3, -2, -1.3]),
+            "dog" : torch.tensor([-0.2, 0.8, 0.3, -2]),  
+            "ran" : torch.tensor([-1.4, 0.7, -1, 1.1]),
+            "PAD" : torch.tensor([0, 0, 0, 0])
+        }
 
-class test(nn.Module):
-    def __init__(self):
-        super().__init__()
+    def embed(self, sentences):
+        if type(sentences[0]) is str:
+            sentences = [sentences]
 
-        self.rnn = nn.LSTM(input_size=3, hidden_size=5, batch_first=False)
+        embedded = []
 
-        self.fully_connected = nn.Linear(5, 2)
-        self.endfunc = nn.Sigmoid()
+        for sentence in sentences:
+            sent_embedded = []
+            for word in sentence:
+                sent_embedded.append(self.embbeddings[word])
 
-    def forward(self, input):
-        print(input)
-        print()
+            sent_embedded = torch.stack(sent_embedded)
+            embedded.append(sent_embedded)
 
-        outputs, (hidden, cell) = self.rnn(input)
+        embedded = torch.stack(embedded)
+        return embedded
 
-        print(outputs)
-        print()
+def run_example():
+    # Example sentences, consider a single batch during training
+    example_sentences = [["the", "cat", "sat", "PAD"],["the", "dog", "ran", "PAD"], ["cat", "dog", "cat", "dog"]]
 
-        return self.endfunc(self.fully_connected(outputs))
+    example_network = BiasDetector(4, 5, Example, model="LSTM", bidirectional=True)
 
-    def get_test(self):
-        return torch.tensor([
-            [
-                [1.0,2.0,3.0],[4.0,5.0,6.0]
-            ]])
-    
+    return example_network(example_sentences)
