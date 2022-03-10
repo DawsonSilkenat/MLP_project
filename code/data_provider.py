@@ -102,6 +102,9 @@ class BertEmbedding():
         self.tokenizer = BertTokenizerFast.from_pretrained(bert_version)
         self.embedder = BertModel.from_pretrained(bert_version)
 
+    def get_embedding_dim(self):
+        return self.embedder.config.to_dict()["hidden_size"]
+
     def tokenize(self, seq):
         # We expect a list of list of strings, which we need to turn back into a list on sentences
         if type(seq[0]) is list:
@@ -124,6 +127,7 @@ class BertEmbedding():
     def update_targets(self, seq, targets):
         
         new_targets = []
+        max_length = -1
         for i in range(len(seq)):
             seq_target = []
 
@@ -132,6 +136,18 @@ class BertEmbedding():
                 tokenized = self.tokenizer(word, add_special_tokens=False, return_token_type_ids=False, return_attention_mask=False)["input_ids"]
                 seq_target = seq_target + [targets[i][j] for _ in range(len(tokenized))]
 
+            max_length = max(max_length, len(seq_target))
+            seq_target = torch.tensor(seq_target, dtype=int)
             new_targets.append(seq_target)
 
+
+        # Pad each tensor individually so they have the same dimension. Use -1 for padding so it can be ignored later,
+        # add and extra pad on both ends to account for the start and end tokens
+        new_targets = [torch.nn.functional.pad(seq_target, (1, max_length - len(seq_target) + 1), value=-1) for seq_target in new_targets]
+
+        # Stack to be a single tensor
+        new_targets = torch.stack(new_targets)
+
+        # TODO Need to convert this into a tensor, figure out how to indecate padding
+        # We use -1 for padding so that our loss function knows to ignore these results
         return new_targets
