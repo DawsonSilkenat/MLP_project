@@ -1,23 +1,20 @@
 from simplediff import diff
-import re 
+import re
 
 # import nltk
 # nltk.download("stopwords")
 from nltk.corpus import stopwords
 import torch
-from transformers import BertTokenizer, BertModel
+from transformers import BertTokenizerFast, BertModel
 
 class LanguageDataset(torch.utils.data.IterableDataset):
-    # Need to change so that 
-    def __init__(self, file_name="bias_data/bias_data/WNC/biased.word.dev", sequence_length=-1, biased_label=1, unbiased_label=0, pad_label=0, require_biaswords=False, remove_stopwords=False):
+    def __init__(self, file_name="../bias_data/bias_data/WNC/biased.word.dev", batch_size=1, biased_label=1, unbiased_label=0, remove_stopwords=False):
         self.data = open(file_name, "r") 
         self.file_name = file_name
-        self.sequence_length = sequence_length 
+        self.batch_size = batch_size
         self.biased_label = biased_label
         self.unbiased_label = unbiased_label
-        self.pad_label = pad_label
         self.remove_stopwords = remove_stopwords
-
 
     def reset(self):
         self.data.close()
@@ -47,6 +44,8 @@ class LanguageDataset(torch.utils.data.IterableDataset):
         for line in self.data:
             line = line.split("\t")
 
+            # original = line[3].split()
+            # updated = line[4].split()
             original = self.sentence_to_sequence(line[3])
             updated = self.sentence_to_sequence(line[4])
             
@@ -70,38 +69,69 @@ class LanguageDataset(torch.utils.data.IterableDataset):
                     for _ in range(len(sequence[1])):
                         labels.append(self.biased_label)
 
-            # TODO check this does what I want it to. What do I do if over the sequence length?
-            if len(labels) < self.sequence_length:
-                labels = labels + [self.pad_label] * (self.sequence_length - len(labels))
-            
-            # This is a list of words and labels. Need to convert the words to vectors
+
             yield (original, labels)
 
-        # We have iterated over all elements of the file, to go over them again a call to reset should be required
-        # self.data.close()
-        # Well, looping and reset don't act as I would like. Fairly obvious why, 
-        # the iterator just runs this function until it completes, and once empty reset doesn't change that this function has finished
-        self.reset()
+    def get_batch(self):
+        # Form batches of size batch_size using the data points from get_sample
+        data = self.get_sample()
+        values = []
+        targets = []
+
+        for point in data: 
+            values.append(point[0])
+            targets.append(point[1])
+            # We use equality rather than inequality so that batch_size = -1 provides all points as a single batch
+            if len(values) == self.batch_size:
+                yield (values, targets)
+                values = []
+                targets = []
+
+        # Yield the remaining elements which do not form a full batch
+        if len(values) > 0:
+            yield (values, targets)
 
     def __iter__(self):
-        return self.get_sample()
+        self.reset()
+        return self.get_batch()
 
 
 class BertEmbedding():
-    def test(self, seq):
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
-        sentence = " ".join(seq)
+    def __init__(self):
+        bert_version = "bert-base-uncased"
+        self.tokenizer = BertTokenizerFast.from_pretrained(bert_version)
+        self.embedder = BertModel.from_pretrained(bert_version)
 
-        print(sentence)
-        print()
-        print(tokenizer.tokenize(sentence))
-        print()
-        print(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence)))
+    def tokenize(self, seq):
+        # We expect a list of list of strings, which we need to turn back into a list on sentences
+        if type(seq[0]) is list:
+            temp = []
+            for s in seq: 
+                temp.append(" ".join(s))
+            seq = temp
+        
+        # Note this includes an attention mask
+        return self.tokenizer(seq, padding=True, return_tensors='pt', return_token_type_ids=False)
 
+    def embed(self, seq):
+        tokens = self.tokenize(seq)
+        embeddings = self.embedder(tokens["input_ids"], tokens["attention_mask"]).last_hidden_state
+        return embeddings
+    
+    """The bert tokenizer can split one word into multiple tokens. We would like to make a single classification per word,
+    however we end up with one classification per token. To adjust for this we choose to asign the same target to each token that 
+    makes up a word"""
+    def update_targets(self, seq, targets):
+        
+        new_targets = []
+        for i in range(len(seq)):
+            seq_target = []
 
-class word2vect():
-    def __init__(self, data_provider):
-        pass
+            for j in range(len(seq[i])):
+                word = seq[i][j]
+                tokenized = self.tokenizer(word, add_special_tokens=False, return_token_type_ids=False, return_attention_mask=False)["input_ids"]
+                seq_target = seq_target + [targets[i][j] for _ in range(len(tokenized))]
 
-    def to_vec(self, word):
-        pass       
+            new_targets.append(seq_target)
+
+        return new_targets
