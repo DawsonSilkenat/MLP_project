@@ -74,7 +74,6 @@ class BiasDetector(nn.Module):
         _, indices = torch.max(output.data, 2)
 
         matrix = self.confusion_matrix(indices.tolist(), targets.tolist())
-
         return loss.data.numpy(), matrix
 
 
@@ -83,9 +82,11 @@ class BiasDetector(nn.Module):
         
         matrix = np.zeros((2,2), dtype=np.uint)
         loss = []
-        for targets, values in eval_provider:
+        for values, targets in eval_provider:
+            print("start eval step")
             # Updates values and targets to be approprate tensors 
             targets = self.embedder.update_targets(values, targets)
+
             values = self.tokenize(values)
             values, targets = values.to(device=self.device), targets.to(device=self.device)
 
@@ -98,6 +99,8 @@ class BiasDetector(nn.Module):
             _, indices = torch.max(output.data, 2)
 
             matrix += self.confusion_matrix(indices.tolist(), targets.tolist())
+
+            print("end eval step")
 
         loss = np.mean(loss)
         return loss.data.numpy(), matrix
@@ -112,16 +115,22 @@ class BiasDetector(nn.Module):
             epoch_train_confusion = np.zeros((2,2), dtype=np.uint)
             epoch_train_loss = []
             for values, targets in train: 
+                print("start train")
                 loss, matrix = self.run_train_iter(values, targets)
+                print("end train")
                 epoch_train_confusion += matrix
                 epoch_train_loss.append(loss)
+                break
 
             epoch_train_loss = np.mean(epoch_train_loss)
 
             summary["train_confusion"].append(epoch_train_confusion)
             summary["train_loss"].append(epoch_train_loss)
 
+            print("start eval")
             epoch_val_loss, epoch_val_confusion = self.evaluate_on(eval)
+            print("end eval")
+
             summary["val_confusion"].append(epoch_val_confusion)
             summary["val_loss"].append(epoch_val_loss)
 
