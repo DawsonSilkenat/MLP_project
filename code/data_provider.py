@@ -5,7 +5,7 @@ import re
 # nltk.download("stopwords")
 from nltk.corpus import stopwords
 import torch
-from transformers import BertTokenizerFast, BertModel
+
 
 class LanguageDataset(torch.utils.data.IterableDataset):
     def __init__(self, file_name="../bias_data/bias_data/WNC/biased.word.dev", batch_size=1, biased_label=1, unbiased_label=0, remove_stopwords=False):
@@ -96,58 +96,3 @@ class LanguageDataset(torch.utils.data.IterableDataset):
         return self.get_batch()
 
 
-class BertEmbedding():
-    def __init__(self):
-        bert_version = "bert-base-uncased"
-        self.tokenizer = BertTokenizerFast.from_pretrained(bert_version)
-        self.embedder = BertModel.from_pretrained(bert_version)
-
-    def get_embedding_dim(self):
-        return self.embedder.config.to_dict()["hidden_size"]
-
-    def tokenize(self, seq):
-        # We expect a list of list of strings, which we need to turn back into a list on sentences
-        if type(seq[0]) is list:
-            temp = []
-            for s in seq: 
-                temp.append(" ".join(s))
-            seq = temp
-        
-        # Note this includes an attention mask
-        return self.tokenizer(seq, padding=True, return_tensors='pt', return_token_type_ids=False)
-
-    def embed(self, seq):
-        tokens = self.tokenize(seq)
-        embeddings = self.embedder(tokens["input_ids"], tokens["attention_mask"]).last_hidden_state
-        return embeddings
-    
-    """The bert tokenizer can split one word into multiple tokens. We would like to make a single classification per word,
-    however we end up with one classification per token. To adjust for this we choose to asign the same target to each token that 
-    makes up a word"""
-    def update_targets(self, seq, targets):
-        
-        new_targets = []
-        max_length = -1
-        for i in range(len(seq)):
-            seq_target = []
-
-            for j in range(len(seq[i])):
-                word = seq[i][j]
-                tokenized = self.tokenizer(word, add_special_tokens=False, return_token_type_ids=False, return_attention_mask=False)["input_ids"]
-                seq_target = seq_target + [targets[i][j] for _ in range(len(tokenized))]
-
-            max_length = max(max_length, len(seq_target))
-            seq_target = torch.tensor(seq_target, dtype=int)
-            new_targets.append(seq_target)
-
-
-        # Pad each tensor individually so they have the same dimension. Use -1 for padding so it can be ignored later,
-        # add and extra pad on both ends to account for the start and end tokens
-        new_targets = [torch.nn.functional.pad(seq_target, (1, max_length - len(seq_target) + 1), value=-1) for seq_target in new_targets]
-
-        # Stack to be a single tensor
-        new_targets = torch.stack(new_targets)
-
-        # TODO Need to convert this into a tensor, figure out how to indecate padding
-        # We use -1 for padding so that our loss function knows to ignore these results
-        return new_targets
