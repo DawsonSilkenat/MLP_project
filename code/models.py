@@ -3,14 +3,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from transformers import BertTokenizerFast, BertModel
+import numpy as np
 
 
 class BiasDetector(nn.Module):
-    def __init__(self, hidden_dim, embedder, lr=0.0001, model="rnn", num_layers=1, dropout=0, bidirectional=False): #, squisher=nn.Sigmoid):
+    def __init__(self, hidden_dim, embedder, lr=0.0001, model="rnn", num_layers=1, dropout=0, bidirectional=False): 
         super(BiasDetector, self).__init__()
-
-
-        # TODO define self.device and self.optimizer
+        
+        if torch.cuda.device_count() > 0:
+            self.device = torch.cuda.current_device()
+        else:
+            self.device = torch.device('cpu')  
+        self.to(self.device)
 
         self.embedder = embedder() 
         self.dropout = nn.Dropout(dropout)
@@ -24,66 +28,120 @@ class BiasDetector(nn.Module):
             raise ValueError("invalid value for model argument in the BiasDetector class")
 
         embedding_dim = self.embedder.get_embedding_dim()
-        self.model = model(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, bidirectional=bidirectional)
+
+        if num_layers == 0:
+            hidden_dim = embedding_dim
+            self.model = torch.nn.Identity
+        else:
+            self.model = model(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=num_layers, dropout=dropout, bidirectional=bidirectional)
 
         # While it may be sensable to use one output and interprate as a probability, easier just to have two classes
         self.fully_connected = nn.Linear(hidden_dim * 2 if bidirectional else hidden_dim, 2)
-        # self.squisher = squisher()
 
-        # self.optimizer = optim.Adam()
+        # There are additional parameters we can specify if we want to do fine tuning, but probably not the time available
+        self.optimizer = optim.AdamW(self.parameters(), lr=lr)
 
     def forward(self, input):
-        if isinstance(input, torch.Tensor):
-            embedded = self.embedder.embed_tokens(input) 
-        else:
-            embedded = self.embedder.embed(input)
-
+        embedded = self.embedder(input)
         embedded = self.dropout(embedded)
         outputs, _ = self.model(embedded)
         return self.fully_connected(outputs)
-        # return self.squisher(self.fully_connected(outputs))
 
+    # This function primarly exists for testing purposes
     def get_embedder(self):
         return self.embedder
 
-    def run_train_iter(self, values, targets, optimizer):
+    def tokenize(self, seq):
+        return self.embedder.tokenize(seq)
+
+    def run_train_iter(self, values, targets):
         self.train() 
         
         # Updates values and targets to be approprate tensors 
         targets = self.embedder.update_targets(values, targets)
-        values = self.embedder.tokenize(values)
-        values.to(device=self.device), targets.to(device=self.device)
+        values = self.tokenize(values)
+        values, targets = values.to(device=self.device), targets.to(device=self.device)
 
         # Get network predictions from forward
         output = self.forward(values)
 
         # Compute the backwards step of backprop
-        loss = F.cross_entropy(input=output, target=targets) 
+        loss = F.cross_entropy(input=output.permute(0,2,1), target=targets, ignore_index=-1) 
         self.optimizer.zero_grad() 
         loss.backward() 
         self.optimizer.step()
 
         _, indices = torch.max(output.data, 2)
 
+        matrix = self.confusion_matrix(indices.tolist(), targets.tolist())
+
+        return loss.data.numpy(), matrix
+
 
     def evaluate_on(self, eval_provider):
-        pass
+        self.eval() 
+        
+        matrix = np.zeros((2,2), dtype=np.uint)
+        loss = []
+        for targets, values in eval_provider:
+            # Updates values and targets to be approprate tensors 
+            targets = self.embedder.update_targets(values, targets)
+            values = self.tokenize(values)
+            values, targets = values.to(device=self.device), targets.to(device=self.device)
 
+            # Get network predictions from forward
+            output = self.forward(values)
+
+            # Compute the backwards step of backprop
+            loss.append(F.cross_entropy(input=output.permute(0,2,1), target=targets, ignore_index=-1)) 
+
+            _, indices = torch.max(output.data, 2)
+
+            matrix += self.confusion_matrix(indices.tolist(), targets.tolist())
+
+        loss = np.mean(loss)
+        return loss.data.numpy(), matrix
 
     def run_experiments(self, train_data, eval_data, num_epochs=100):
-        for _ in range(num_epochs):
+        summary = {"train_confusion": [], "train_loss": [], "val_confusion": [], "val_loss": []} 
+
+        for i in range(num_epochs):
             train = iter(train_data)
             eval = iter(eval_data)
 
+            epoch_train_confusion = np.zeros((2,2), dtype=np.uint)
+            epoch_train_loss = []
             for values, targets in train: 
-                self.run_train_iter(values, targets)
+                loss, matrix = self.run_train_iter(values, targets)
+                epoch_train_confusion += matrix
+                epoch_train_loss.append(loss)
 
-            self.evaluate_on(eval)
+            epoch_train_loss = np.mean(epoch_train_loss)
+
+            summary["train_confusion"].append(epoch_train_confusion)
+            summary["train_loss"].append(epoch_train_loss)
+
+            epoch_val_loss, epoch_val_confusion = self.evaluate_on(eval)
+            summary["val_confusion"].append(epoch_val_confusion)
+            summary["val_loss"].append(epoch_val_loss)
+
+            print("Epoch i\ntraining loss: {:.4f}, training confusion: {}\neval loss: {:.4f}, eval confusion: {}\n"
+                .format(epoch_train_loss,epoch_train_confusion,epoch_val_loss,epoch_val_confusion))
 
 
+    def confusion_matrix(self, predictions, actual):
+        matrix = np.zeros((2,2), dtype=np.uint)
+        for pred, act in zip(predictions, actual):
+            if actual != -1:
+                matrix[pred, act] += 1
+        return matrix
 
-class BertEmbedding():
+        
+
+
+class BertEmbedding(nn.Module):
     def __init__(self):
+        super(BertEmbedding, self).__init__()
         bert_version = "bert-base-uncased"
         self.tokenizer = BertTokenizerFast.from_pretrained(bert_version)
         self.embedder = BertModel.from_pretrained(bert_version)
@@ -103,7 +161,7 @@ class BertEmbedding():
         return self.tokenizer(seq, padding=True, return_tensors='pt', return_token_type_ids=False)
 
     # Embedding given a sequence of words
-    def embed(self, seq):
+    def embed_words(self, seq):
         return self.embed_tokens(self.tokenize(seq))
 
     # Embedding given a tensor of tokens, such as the one returned by tokenize
@@ -111,11 +169,14 @@ class BertEmbedding():
         embeddings = self.embedder(tokens["input_ids"], tokens["attention_mask"]).last_hidden_state
         return embeddings 
     
+    # For simplicity assume the input has already been tokenized
+    def forward(self, input):
+        return self.embed_tokens(input)
+
     """The bert tokenizer can split one word into multiple tokens. We would like to make a single classification per word,
     however we end up with one classification per token. To adjust for this we choose to asign the same target to each token that 
     makes up a word"""
     def update_targets(self, seq, targets):
-        
         new_targets = []
         max_length = -1
         for i in range(len(seq)):
