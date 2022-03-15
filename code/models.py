@@ -51,9 +51,7 @@ class BiasDetector(nn.Module):
 
         self.criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-1)
 
-        self.experiment_folder = os.path.abspath(experiment_name)
-
-        print(self.experiment_folder)
+        self.experiment_folder = os.path.join(os.getcwd(), "results", experiment_name)
 
     def forward(self, input):
         embedded = self.embedder(input)
@@ -114,8 +112,6 @@ class BiasDetector(nn.Module):
             _, indices = torch.max(output.data, 2)
 
             matrix += self.confusion_matrix(indices.tolist(), targets.tolist())
-
-            break
         
 
         loss = np.mean(loss)
@@ -144,9 +140,6 @@ class BiasDetector(nn.Module):
                 epoch_train_confusion += matrix
                 epoch_train_loss.append(loss)
 
-                break
-
-
             epoch_train_loss = np.mean(epoch_train_loss)
 
             summary["train_confusion_0_0"].append(epoch_train_confusion[0,0])
@@ -166,26 +159,16 @@ class BiasDetector(nn.Module):
             epoch_elapsed_seconds = int(time.time() - epoch_start_time) 
             estimated_remaining_seconds = epoch_elapsed_seconds * (num_epochs - i - 1)
 
-
-            print(num_epochs - i - 1)
-            print(estimated_remaining_seconds)
-            print()
-
             epoch_elapsed_minutes = epoch_elapsed_seconds // 60
             epoch_elapsed_seconds = epoch_elapsed_seconds % 60
-            
-            print(epoch_elapsed_minutes, epoch_elapsed_seconds)
-            print()
 
             estimated_remaining_minutes = estimated_remaining_seconds // 60
             estimated_remaining_seconds = estimated_remaining_seconds % 60
-            print(estimated_remaining_minutes, estimated_remaining_seconds)
-            print()
 
             print("Epoch {}\ntraining loss: {:.4f}, training confusion: {}\neval loss: {:.4f}, eval confusion: {}"
                 .format(i, epoch_train_loss, epoch_train_confusion, epoch_val_loss, epoch_val_confusion))
             print("Epoch run time: {} minutes and {} seconds\nEstimated remaining time: {} minutes and {} seconds\n"
-                .format(epoch_elapsed_minutes, epoch_elapsed_seconds, estimated_remaining_minutes, epoch_elapsed_seconds))
+                .format(epoch_elapsed_minutes, epoch_elapsed_seconds, estimated_remaining_minutes, estimated_remaining_seconds))
         
         print("saving")
 
