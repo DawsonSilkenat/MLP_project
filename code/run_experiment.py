@@ -29,9 +29,9 @@ models.BiasDetector(0, models.BertEmbedding, "BERT_only", num_layers=0, class_we
 models.BiasDetector(255, models.BertEmbedding, "single_layer_lstm", num_layers=1, class_weights=CLASS_WEIGHTS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
 
 # Experiment 3: multi layer LSTM after the BERT embedding
-models.BiasDetector(255, models.BertEmbedding, "single_layer_lstm", num_layers=32, class_weights=CLASS_WEIGHTS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
+models.BiasDetector(255, models.BertEmbedding, "multi_layer_lstm", num_layers=32, class_weights=CLASS_WEIGHTS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
 
 # Experiments 4, 5 and 6: Rerun 1, 2 and 3 but without stopwords.
-models.BiasDetector(0, models.BertEmbedding, "BERT_only", num_layers=0, class_weights=CLASS_WEIGHTS_NO_STOPWORDS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
-models.BiasDetector(255, models.BertEmbedding, "single_layer_lstm", num_layers=1, class_weights=CLASS_WEIGHTS_NO_STOPWORDS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
-models.BiasDetector(255, models.BertEmbedding, "single_layer_lstm", num_layers=32, class_weights=CLASS_WEIGHTS_NO_STOPWORDS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
+models.BiasDetector(0, models.BertEmbedding, "BERT_only_no_stopwords", num_layers=0, class_weights=CLASS_WEIGHTS_NO_STOPWORDS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
+models.BiasDetector(255, models.BertEmbedding, "single_layer_lstm_no_stopwords", num_layers=1, class_weights=CLASS_WEIGHTS_NO_STOPWORDS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
+models.BiasDetector(255, models.BertEmbedding, "multi_layer_lstm_no_stopwords", num_layers=32, class_weights=CLASS_WEIGHTS_NO_STOPWORDS).run_experiments(train, eval, num_epochs=NUM_EPOCHS)
