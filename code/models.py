@@ -4,10 +4,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 from transformers import BertTokenizerFast, BertModel
 import numpy as np
-
+import os
+import time
+import csv
 
 class BiasDetector(nn.Module):
-    def __init__(self, hidden_dim, embedder, lr=0.0001, model="rnn", num_layers=1, dropout=0, bidirectional=False): 
+    def __init__(self, hidden_dim, embedder, experiment_name, lr=5e-5, model="lstm", num_layers=1, dropout=0.1, bidirectional=False, class_weights=None): 
         super(BiasDetector, self).__init__()
         
         if torch.cuda.device_count() > 0:
@@ -41,6 +43,18 @@ class BiasDetector(nn.Module):
         # There are additional parameters we can specify if we want to do fine tuning, but probably not the time available
         self.optimizer = optim.AdamW(self.parameters(), lr=lr)
 
+        # Default value for weights is already none, so we don't need to do anything if class_weights is none
+        if class_weights is not None:
+            class_weights = torch.FloatTensor(class_weights)
+            # We apply some normalisation to the weights as to not significantly increase or decrease learning rate on average
+            class_weights = class_weights / class_weights.sum()
+
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-1)
+
+        self.experiment_folder = os.path.abspath(experiment_name)
+
+        print(self.experiment_folder)
+
     def forward(self, input):
         embedded = self.embedder(input)
         embedded = self.dropout(embedded)
@@ -66,7 +80,8 @@ class BiasDetector(nn.Module):
         output = self.forward(values)
 
         # Compute the backwards step of backprop
-        loss = F.cross_entropy(input=output.permute(0,2,1), target=targets, ignore_index=-1) 
+        # loss = F.cross_entropy(input=output.permute(0,2,1), target=targets, ignore_index=-1) 
+        loss = self.criterion(input=output.permute(0,2,1), target=targets)
         self.optimizer.zero_grad() 
         loss.backward() 
         self.optimizer.step()
@@ -83,7 +98,6 @@ class BiasDetector(nn.Module):
         matrix = np.zeros((2,2), dtype=np.uint)
         loss = []
         for values, targets in eval_provider:
-            print("start eval step")
             # Updates values and targets to be approprate tensors 
             targets = self.embedder.update_targets(values, targets)
 
@@ -94,48 +108,91 @@ class BiasDetector(nn.Module):
             output = self.forward(values)
 
             # Compute the backwards step of backprop
-            loss.append(F.cross_entropy(input=output.permute(0,2,1), target=targets, ignore_index=-1)) 
+            # loss.append(F.cross_entropy(input=output.permute(0,2,1), target=targets, ignore_index=-1)) 
+            loss.append(self.criterion(input=output.permute(0,2,1), target=targets).data)
 
             _, indices = torch.max(output.data, 2)
 
             matrix += self.confusion_matrix(indices.tolist(), targets.tolist())
 
-            print("end eval step")
+            break
+        
 
         loss = np.mean(loss)
-        return loss.data.numpy(), matrix
+
+        return loss, matrix
 
     def run_experiments(self, train_data, eval_data, num_epochs=100):
-        summary = {"train_confusion": [], "train_loss": [], "val_confusion": [], "val_loss": []} 
+        # summary = {"train_confusion": [], "train_loss": [], "val_confusion": [], "val_loss": []} 
 
+        # Rather than store matrices, summary will have a seprate list for each matrix entry
+        # For instance, confusion_0_1 will be the list containing matrix[0,1] for each epoch
+        summary = {"train_confusion_0_0": [], "train_confusion_0_1": [], "train_confusion_1_0": [], "train_confusion_1_1": [], "train_loss": [], 
+                    "val_confusion_0_0": [], "val_confusion_0_1": [], "val_confusion_1_0": [], "val_confusion_1_1": [], "val_loss": []} 
+
+        # There are some warnings we are ignoring, this newline helps separate the output from these warnings
+        print()
         for i in range(num_epochs):
+            epoch_start_time = time.time()
             train = iter(train_data)
             eval = iter(eval_data)
 
             epoch_train_confusion = np.zeros((2,2), dtype=np.uint)
             epoch_train_loss = []
             for values, targets in train: 
-                print("start train")
                 loss, matrix = self.run_train_iter(values, targets)
-                print("end train")
                 epoch_train_confusion += matrix
                 epoch_train_loss.append(loss)
+
                 break
+
 
             epoch_train_loss = np.mean(epoch_train_loss)
 
-            summary["train_confusion"].append(epoch_train_confusion)
+            summary["train_confusion_0_0"].append(epoch_train_confusion[0,0])
+            summary["train_confusion_0_1"].append(epoch_train_confusion[0,1])
+            summary["train_confusion_1_0"].append(epoch_train_confusion[1,0])
+            summary["train_confusion_1_1"].append(epoch_train_confusion[1,1])
             summary["train_loss"].append(epoch_train_loss)
 
-            print("start eval")
             epoch_val_loss, epoch_val_confusion = self.evaluate_on(eval)
-            print("end eval")
 
-            summary["val_confusion"].append(epoch_val_confusion)
+            summary["val_confusion_0_0"].append(epoch_val_confusion[0,0])
+            summary["val_confusion_0_1"].append(epoch_val_confusion[0,1])
+            summary["val_confusion_1_0"].append(epoch_val_confusion[1,0])
+            summary["val_confusion_1_1"].append(epoch_val_confusion[1,1])
             summary["val_loss"].append(epoch_val_loss)
 
-            print("Epoch i\ntraining loss: {:.4f}, training confusion: {}\neval loss: {:.4f}, eval confusion: {}\n"
-                .format(epoch_train_loss,epoch_train_confusion,epoch_val_loss,epoch_val_confusion))
+            epoch_elapsed_seconds = int(time.time() - epoch_start_time) 
+            estimated_remaining_seconds = epoch_elapsed_seconds * (num_epochs - i - 1)
+
+
+            print(num_epochs - i - 1)
+            print(estimated_remaining_seconds)
+            print()
+
+            epoch_elapsed_minutes = epoch_elapsed_seconds // 60
+            epoch_elapsed_seconds = epoch_elapsed_seconds % 60
+            
+            print(epoch_elapsed_minutes, epoch_elapsed_seconds)
+            print()
+
+            estimated_remaining_minutes = estimated_remaining_seconds // 60
+            estimated_remaining_seconds = estimated_remaining_seconds % 60
+            print(estimated_remaining_minutes, estimated_remaining_seconds)
+            print()
+
+            print("Epoch {}\ntraining loss: {:.4f}, training confusion: {}\neval loss: {:.4f}, eval confusion: {}"
+                .format(i, epoch_train_loss, epoch_train_confusion, epoch_val_loss, epoch_val_confusion))
+            print("Epoch run time: {} minutes and {} seconds\nEstimated remaining time: {} minutes and {} seconds\n"
+                .format(epoch_elapsed_minutes, epoch_elapsed_seconds, estimated_remaining_minutes, epoch_elapsed_seconds))
+        
+        print("saving")
+
+        self.save_model("model.pt")
+        self.save_stats(summary, "statistics.csv")
+
+        print("done")
 
 
     def confusion_matrix(self, predictions, actual):
@@ -144,6 +201,51 @@ class BiasDetector(nn.Module):
             if actual != -1:
                 matrix[pred, act] += 1
         return matrix
+
+    def save_model(self, filename, path=None):
+        if path is None:
+            path = self.experiment_folder
+        if not os.path.exists(path): 
+            os.mkdir(path)
+
+        file_location = os.path.join(path, filename)
+
+        torch.save({
+            "embedder" : self.embedder.embedder.state_dict(),
+            "dropout" : self.dropout.state_dict(),
+            "model" : self.model.state_dict(),
+            "fully connected" : self.fully_connected.state_dict(),
+            "optimizer" : self.optimizer.state_dict(),
+            "criterion" : self.criterion.state_dict() 
+        }, file_location)
+
+    def save_stats(self, stats, filename, path=None):
+        if path is None:
+            path = self.experiment_folder
+        if not os.path.exists(path): 
+            os.mkdir(path)
+
+        file_location = os.path.join(path, filename)
+
+        with open(file_location, "w") as f:
+            writer = csv.writer(f)
+
+            writer.writerow(list(stats.keys()))
+
+            total_rows = len(list(stats.values())[0])
+            for idx in range(total_rows):
+                row_to_add = [value[idx] for value in list(stats.values())]
+                writer.writerow(row_to_add) 
+
+    def load_model(self, path):
+        save_data = torch.load(path)
+
+        self.dropout.load_state_dict(save_data["dropout"])
+        self.model.load_state_dict(save_data["model"])
+        self.fully_connected.load_state_dict(save_data["fully connected"])
+        self.optimizer.load_state_dict(save_data["optimizer"])
+        self.criterion.load_state_dict(save_data["criterion"])
+        self.embedder.embedder.load_state_dict(save_data["embedder"])
 
         
 

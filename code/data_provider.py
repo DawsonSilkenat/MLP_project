@@ -1,8 +1,9 @@
 from simplediff import diff
 import re
-
-# import nltk
-# nltk.download("stopwords")
+import os
+import nltk
+if not "stopwords" in os.listdir(nltk.data.find("corpora")):
+    nltk.download("stopwords")
 from nltk.corpus import stopwords
 import torch
 
